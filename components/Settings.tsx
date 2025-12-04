@@ -80,14 +80,14 @@ const Settings: React.FC = () => {
   const applyPreset = (type: 'default' | 'fast' | 'calm') => {
     switch (type) {
       case 'calm':
-        setSettings(prev => ({ ...prev, rate: 0.9, pitch: 0.9 }));
+        setSettings(prev => ({ ...prev, rate: 0.9, pitch: 0.9, volume: 1.0 }));
         break;
       case 'fast':
-        setSettings(prev => ({ ...prev, rate: 1.2, pitch: 1.1 }));
+        setSettings(prev => ({ ...prev, rate: 1.2, pitch: 1.1, volume: 1.0 }));
         break;
       case 'default':
       default:
-        setSettings(prev => ({ ...prev, rate: 1.0, pitch: 1.0 }));
+        setSettings(prev => ({ ...prev, rate: 1.0, pitch: 1.0, volume: 1.0 }));
         break;
     }
   };
@@ -133,7 +133,7 @@ const Settings: React.FC = () => {
             </p>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* Speed Control */}
             <div className="bg-gray-50 dark:bg-gray-700/50 p-4 rounded-xl">
               <div className="flex justify-between items-center mb-2">
@@ -181,6 +181,31 @@ const Settings: React.FC = () => {
               <div className="flex justify-between text-xs text-gray-400 mt-1">
                 <span>Grave</span>
                 <span>Agudo</span>
+              </div>
+            </div>
+
+            {/* Volume Control */}
+            <div className="bg-gray-50 dark:bg-gray-700/50 p-4 rounded-xl md:col-span-2">
+              <div className="flex justify-between items-center mb-2">
+                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Volumen
+                </label>
+                <span className="text-xs font-mono bg-white dark:bg-gray-600 px-2 py-1 rounded text-gray-600 dark:text-gray-200">
+                  {Math.round(settings.volume * 100)}%
+                </span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.1"
+                value={settings.volume}
+                onChange={(e) => handleSettingChange('volume', parseFloat(e.target.value))}
+                className="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer accent-brand-600"
+              />
+              <div className="flex justify-between text-xs text-gray-400 mt-1">
+                <span>Silencio</span>
+                <span>Máximo</span>
               </div>
             </div>
           </div>

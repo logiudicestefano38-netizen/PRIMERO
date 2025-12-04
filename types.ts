@@ -15,6 +15,7 @@ export interface ChatMessage {
   role: 'user' | 'model';
   text: string;
   timestamp: Date;
+  sources?: { uri: string; title: string }[];
 }
 
 export interface VoiceSettings {

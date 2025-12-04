@@ -37,11 +37,17 @@ Usuario: "¿Qué tiempo hace en Madrid?"
 Fany: "Déjame chequear rápido... Parece que hay 20 grados y sol. ¿Tienes planes de salir?"
 `;
 
+interface GeminiResponse {
+  text: string;
+  sources?: { uri: string; title: string }[];
+}
+
 export const sendMessageToGemini = async (
   message: string,
   history: Content[] = [],
-  isLiveMode: boolean = false
-): Promise<string> => {
+  isLiveMode: boolean = false,
+  useGoogleSearch: boolean = false
+): Promise<GeminiResponse> => {
   try {
     // Safe access to API Key handling potential undefined process in browser
     let apiKey = '';
@@ -55,32 +61,60 @@ export const sendMessageToGemini = async (
 
     if (!apiKey) {
       console.error("API Key not found in environment.");
-      return "Error de configuración: No se encontró la clave API.";
+      return { text: "Error de configuración: No se encontró la clave API." };
     }
 
     // Initialize inside the function
     const ai = new GoogleGenAI({ apiKey });
-    const model = 'gemini-2.5-flash';
+    const model = useGoogleSearch ? 'gemini-2.5-flash' : 'gemini-3-pro-preview';
 
     // Combine base instructions with mode-specific instructions
     const combinedInstruction = isLiveMode 
       ? `${BASE_SYSTEM_INSTRUCTION}\n\n${LIVE_MODE_INSTRUCTION}`
       : `${BASE_SYSTEM_INSTRUCTION}\n\n6. Sé concisa pero útil. Usa formato Markdown para resaltar código o términos técnicos.`;
+      
+    const config: any = {
+      systemInstruction: combinedInstruction,
+      temperature: isLiveMode ? 0.8 : 0.7,
+    };
+
+    if (useGoogleSearch) {
+      config.tools = [{ googleSearch: {} }];
+    }
 
     // Create a new chat session with the system instruction
     const chat = ai.chats.create({
       model: model,
-      config: {
-        systemInstruction: combinedInstruction,
-        temperature: isLiveMode ? 0.8 : 0.7, // Slightly higher creativity for conversation
-      },
+      config: config,
       history: history
     });
 
     const result = await chat.sendMessage({ message: message });
-    return result.text || "Lo siento, no pude generar una respuesta.";
+
+    const groundingChunks = result.candidates?.[0]?.groundingMetadata?.groundingChunks;
+    let sources: { uri: string; title: string }[] = [];
+
+    if (groundingChunks && Array.isArray(groundingChunks)) {
+      sources = groundingChunks
+        .map((chunk: any) => {
+          if (chunk.web && chunk.web.uri) {
+            return {
+              uri: chunk.web.uri,
+              title: chunk.web.title || chunk.web.uri,
+            };
+          }
+          return null;
+        })
+        .filter((source): source is { uri: string; title: string } => source !== null);
+    }
+
+    return { 
+      text: result.text || "Lo siento, no pude generar una respuesta.",
+      sources: sources.length > 0 ? sources : undefined,
+    };
+
   } catch (error) {
     console.error("Error calling Gemini API:", error);
-    return "Hubo un error al comunicarse con el servidor de IA. Por favor, verifica tu conexión o intenta más tarde.";
+    return { text: "Hubo un error al comunicarse con el servidor de IA. Por favor, verifica tu conexión o intenta más tarde." };
   }
 };

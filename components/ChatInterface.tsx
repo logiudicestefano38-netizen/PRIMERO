@@ -3,6 +3,14 @@ import { ChatMessage, VoiceSettings } from '../types';
 import { sendMessageToGemini } from '../services/geminiService';
 import type { Content } from '@google/genai';
 
+// Extend window interface for SpeechRecognition
+declare global {
+  interface Window {
+    SpeechRecognition: any;
+    webkitSpeechRecognition: any;
+  }
+}
+
 const STORAGE_KEY = 'fany_chat_history';
 const VOICE_SETTINGS_KEY = 'fany_voice_settings';
 
@@ -38,7 +46,11 @@ const ChatInterface: React.FC = () => {
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isLiveMode, setIsLiveMode] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [useGoogleSearch, setUseGoogleSearch] = useState(false);
+  
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const recognitionRef = useRef<any>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -51,6 +63,15 @@ const ChatInterface: React.FC = () => {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
   }, [messages]);
+
+  // Clean up recognition on unmount
+  useEffect(() => {
+    return () => {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+    };
+  }, []);
 
   // Function to handle Text-to-Speech
   const speakText = (text: string) => {
@@ -92,6 +113,58 @@ const ChatInterface: React.FC = () => {
     }
   };
 
+  const toggleListening = () => {
+    if (isListening) {
+      recognitionRef.current?.stop();
+      setIsListening(false);
+      return;
+    }
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      alert("Tu navegador no soporta reconocimiento de voz nativo. Por favor, usa Google Chrome o Microsoft Edge.");
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'es-ES';
+    recognition.continuous = false;
+    recognition.interimResults = false;
+
+    recognition.onstart = () => {
+      setIsListening(true);
+    };
+
+    recognition.onresult = (event: any) => {
+      const transcript = event.results[0][0].transcript;
+      setInputValue(prev => {
+        // Append text with space if needed
+        const space = prev.length > 0 && !prev.endsWith(' ') ? ' ' : '';
+        return prev + space + transcript;
+      });
+    };
+
+    recognition.onerror = (event: any) => {
+      // "no-speech" is common if user doesn't speak immediately; treat it gently.
+      if (event.error === 'no-speech') {
+        console.warn("Reconocimiento de voz: No se detectó audio.");
+      } else if (event.error === 'not-allowed') {
+        alert("Permiso de micrófono denegado. Por favor verifica la configuración de tu navegador.");
+        console.error("Error reconocimiento voz:", event.error);
+      } else {
+        console.error("Error reconocimiento voz:", event.error);
+      }
+      setIsListening(false);
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+    };
+
+    recognitionRef.current = recognition;
+    recognition.start();
+  };
+
   const handleSendMessage = async () => {
     if (!inputValue.trim() || isLoading) return;
 
@@ -118,14 +191,15 @@ const ChatInterface: React.FC = () => {
           parts: [{ text: m.text }]
         }));
 
-      // Get response passing isLiveMode flag
-      const responseText = await sendMessageToGemini(userText, history, isLiveMode);
+      // Get response passing flags
+      const { text: responseText, sources: responseSources } = await sendMessageToGemini(userText, history, isLiveMode, useGoogleSearch);
 
       const newModelMsg: ChatMessage = {
         id: (Date.now() + 1).toString(),
         role: 'model',
         text: responseText,
-        timestamp: new Date()
+        timestamp: new Date(),
+        sources: responseSources,
       };
 
       setMessages(prev => [...prev, newModelMsg]);
@@ -234,7 +308,30 @@ const ChatInterface: React.FC = () => {
                ) : (
                    <p className="text-sm">{msg.text}</p>
                )}
-               <span className={`text-[10px] block mt-1 ${
+               
+               {/* Render Sources */}
+               {msg.sources && msg.sources.length > 0 && (
+                 <div className="mt-4 pt-3 border-t border-gray-200 dark:border-gray-600">
+                   <h4 className="text-xs font-bold text-gray-500 dark:text-gray-400 mb-2">Fuentes:</h4>
+                   <ol className="list-decimal list-inside space-y-1">
+                     {msg.sources.map((source, index) => (
+                       <li key={index} className="text-xs truncate">
+                         <a 
+                           href={source.uri} 
+                           target="_blank" 
+                           rel="noopener noreferrer"
+                           className="text-brand-600 dark:text-brand-400 hover:underline"
+                           title={source.title}
+                         >
+                           {source.title}
+                         </a>
+                       </li>
+                     ))}
+                   </ol>
+                 </div>
+               )}
+
+               <span className={`text-[10px] block mt-2 ${
                  msg.role === 'user' ? 'text-brand-200' : 'text-gray-400 dark:text-gray-400'
                }`}>
                  {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -273,6 +370,17 @@ const ChatInterface: React.FC = () => {
       {/* Input Area */}
       <div className="p-4 bg-white dark:bg-gray-800 border-t border-gray-100 dark:border-gray-700 transition-colors">
         <div className={`flex items-end space-x-2 bg-gray-50 dark:bg-gray-700 p-2 rounded-xl border focus-within:ring-2 transition-all ${isLiveMode ? 'border-red-200 focus-within:border-red-500 focus-within:ring-red-100 dark:focus-within:ring-red-900/30' : 'border-gray-200 dark:border-gray-600 focus-within:border-brand-300 dark:focus-within:border-brand-500 focus-within:ring-brand-100 dark:focus-within:ring-brand-900'}`}>
+          <button
+            onClick={() => setUseGoogleSearch(!useGoogleSearch)}
+            className={`p-3 rounded-lg flex-shrink-0 transition-all duration-300 ${
+              useGoogleSearch
+                ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-300 shadow-inner'
+                : 'bg-gray-100 dark:bg-gray-600 text-gray-500 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-500'
+            }`}
+            title="Activar/Desactivar Búsqueda con Google"
+          >
+            <i className="fab fa-google"></i>
+          </button>
           <textarea
             className="flex-1 bg-transparent border-0 focus:ring-0 text-gray-800 dark:text-white text-sm resize-none max-h-32 py-3 px-2 placeholder-gray-400 dark:placeholder-gray-400"
             rows={1}
@@ -281,6 +389,21 @@ const ChatInterface: React.FC = () => {
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
           />
+
+          {/* Microphone Button */}
+          <button
+            onClick={toggleListening}
+            className={`p-3 rounded-lg flex-shrink-0 transition-colors ${
+              isListening
+                ? 'bg-red-500 text-white animate-pulse shadow-md'
+                : 'bg-gray-100 dark:bg-gray-600 text-gray-500 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-500'
+            }`}
+            title="Dictar por voz"
+          >
+            <i className={`fas ${isListening ? 'fa-microphone-slash' : 'fa-microphone'}`}></i>
+          </button>
+
+          {/* Send Button */}
           <button
             onClick={handleSendMessage}
             disabled={isLoading || !inputValue.trim()}
@@ -291,12 +414,18 @@ const ChatInterface: React.FC = () => {
                   ? 'bg-red-600 text-white hover:bg-red-700 shadow-md'
                   : 'bg-brand-600 text-white hover:bg-brand-700 shadow-md'
             }`}
+            title="Enviar mensaje"
           >
-            <i className={`fas ${isLiveMode ? 'fa-microphone-alt' : 'fa-paper-plane'}`}></i>
+            <i className={`fas ${isLiveMode ? 'fa-phone' : 'fa-paper-plane'}`}></i>
           </button>
         </div>
         <p className="text-center text-xs text-gray-400 dark:text-gray-500 mt-2">
-          {isLiveMode ? 'Modo de respuesta rápida activado.' : 'Fany IA puede cometer errores. Verifica la información importante.'}
+           {useGoogleSearch 
+            ? <span className="font-semibold text-blue-600 dark:text-blue-400">Búsqueda con Google activada.</span>
+            : isLiveMode 
+              ? 'Modo de respuesta rápida activado.' 
+              : 'Fany IA puede cometer errores. Verifica la información importante.'
+          }
         </p>
       </div>
     </div>
