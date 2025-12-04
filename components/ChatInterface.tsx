@@ -1,14 +1,15 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ChatMessage } from '../types';
+import { ChatMessage, VoiceSettings } from '../types';
 import { sendMessageToGemini } from '../services/geminiService';
 import type { Content } from '@google/genai';
 
 const STORAGE_KEY = 'fany_chat_history';
+const VOICE_SETTINGS_KEY = 'fany_voice_settings';
 
 const INITIAL_MESSAGE: ChatMessage = {
   id: 'welcome',
   role: 'model',
-  text: '¡Hola! Soy Fany IA, tu asistente técnico. ¿En qué puedo ayudarte hoy con respecto a programación, soporte técnico o IA?',
+  text: '¡Hola! Soy Fany IA. ¿En qué puedo ayudarte hoy?',
   timestamp: new Date() // Placeholder, will be refreshed on init
 };
 
@@ -20,7 +21,6 @@ const ChatInterface: React.FC = () => {
         const saved = localStorage.getItem(STORAGE_KEY);
         if (saved) {
           const parsed = JSON.parse(saved);
-          // Validate that it is an array before mapping
           if (Array.isArray(parsed)) {
             return parsed.map((msg: any) => ({
               ...msg,
@@ -30,15 +30,14 @@ const ChatInterface: React.FC = () => {
         }
       } catch (error) {
         console.error("Error cargando historial:", error);
-        // If data is corrupt, we could clear it: localStorage.removeItem(STORAGE_KEY);
       }
     }
-    // Return a fresh instance of the initial message
     return [{ ...INITIAL_MESSAGE, timestamp: new Date() }];
   });
 
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isLiveMode, setIsLiveMode] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -49,16 +48,47 @@ const ChatInterface: React.FC = () => {
     scrollToBottom();
   }, [messages, isLoading]);
 
-  // Save to localStorage whenever messages change
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
   }, [messages]);
+
+  // Function to handle Text-to-Speech
+  const speakText = (text: string) => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+
+    // Cancel any current speech
+    window.speechSynthesis.cancel();
+
+    const settings: VoiceSettings = JSON.parse(
+      localStorage.getItem(VOICE_SETTINGS_KEY) || 
+      '{"pitch": 1.0, "rate": 1.0, "volume": 1.0, "voiceURI": null}'
+    );
+
+    // Strip markdown characters for better speech (simple regex)
+    const cleanText = text.replace(/[*#`_]/g, '');
+
+    const utterance = new SpeechSynthesisUtterance(cleanText);
+    utterance.pitch = settings.pitch;
+    utterance.rate = settings.rate;
+    utterance.volume = settings.volume;
+
+    if (settings.voiceURI) {
+      const voices = window.speechSynthesis.getVoices();
+      const selectedVoice = voices.find(v => v.voiceURI === settings.voiceURI);
+      if (selectedVoice) {
+        utterance.voice = selectedVoice;
+      }
+    }
+
+    window.speechSynthesis.speak(utterance);
+  };
 
   const handleClearHistory = () => {
     if (window.confirm('¿Estás seguro de que deseas borrar todo el historial de chat?')) {
       const resetState = [{ ...INITIAL_MESSAGE, timestamp: new Date() }];
       setMessages(resetState);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(resetState));
+      window.speechSynthesis.cancel();
     }
   };
 
@@ -88,8 +118,8 @@ const ChatInterface: React.FC = () => {
           parts: [{ text: m.text }]
         }));
 
-      // Get response
-      const responseText = await sendMessageToGemini(userText, history);
+      // Get response passing isLiveMode flag
+      const responseText = await sendMessageToGemini(userText, history, isLiveMode);
 
       const newModelMsg: ChatMessage = {
         id: (Date.now() + 1).toString(),
@@ -99,6 +129,12 @@ const ChatInterface: React.FC = () => {
       };
 
       setMessages(prev => [...prev, newModelMsg]);
+
+      // Automatically speak in Live Mode
+      if (isLiveMode) {
+        speakText(responseText);
+      }
+
     } catch (error) {
       console.error(error);
       setMessages(prev => [...prev, {
@@ -122,27 +158,59 @@ const ChatInterface: React.FC = () => {
   return (
     <div className="flex flex-col h-[calc(100vh-140px)] bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden transition-colors duration-300">
       {/* Header */}
-      <div className="bg-brand-600 dark:bg-brand-700 p-4 text-white flex items-center justify-between transition-colors">
+      <div className={`p-4 text-white flex items-center justify-between transition-colors duration-500 ${isLiveMode ? 'bg-gradient-to-r from-red-600 to-rose-500' : 'bg-brand-600 dark:bg-brand-700'}`}>
         <div className="flex items-center space-x-3">
-          <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center">
-             <i className="fas fa-robot text-xl"></i>
+          <div className="relative">
+            <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center backdrop-blur-sm">
+               {isLiveMode ? <i className="fas fa-headset text-xl"></i> : <i className="fas fa-robot text-xl"></i>}
+            </div>
+            {isLiveMode && (
+              <span className="absolute -top-1 -right-1 flex h-3 w-3">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500 border-2 border-red-600"></span>
+              </span>
+            )}
           </div>
           <div>
-            <h3 className="font-bold">Fany IA Chat</h3>
-            <p className="text-brand-100 text-xs flex items-center">
-              <span className="w-2 h-2 bg-green-400 rounded-full mr-1"></span>
-              En línea
+            <h3 className="font-bold flex items-center gap-2">
+              Fany IA Chat
+              {isLiveMode && <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full uppercase tracking-wider font-bold">Live</span>}
+            </h3>
+            <p className="text-white/80 text-xs flex items-center">
+              {isLiveMode ? 'Modo Llamada Activo' : 'Asistente Técnico'}
             </p>
           </div>
         </div>
-        <button 
-          onClick={handleClearHistory}
-          className="p-2 bg-white/10 hover:bg-white/20 rounded-lg text-white transition-colors text-sm flex items-center gap-2"
-          title="Borrar historial de conversación"
-        >
-          <i className="fas fa-trash-alt"></i>
-          <span className="hidden sm:inline">Borrar Historial</span>
-        </button>
+        
+        <div className="flex items-center gap-3">
+          {/* Live Mode Toggle */}
+          <div className="flex items-center gap-2 mr-2 bg-black/10 px-3 py-1.5 rounded-full">
+            <span className="text-xs font-medium hidden sm:inline">{isLiveMode ? 'ON AIR' : 'Modo Live'}</span>
+            <button 
+              onClick={() => {
+                const newMode = !isLiveMode;
+                setIsLiveMode(newMode);
+                if (!newMode) window.speechSynthesis.cancel();
+              }}
+              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${isLiveMode ? 'bg-green-400' : 'bg-gray-400/50'}`}
+              title="Activar modo llamada (Respuestas rápidas y voz)"
+            >
+              <span
+                className={`${
+                  isLiveMode ? 'translate-x-5' : 'translate-x-1'
+                } inline-block h-3 w-3 transform rounded-full bg-white transition-transform`}
+              />
+            </button>
+          </div>
+
+          <button 
+            onClick={handleClearHistory}
+            className="p-2 bg-white/10 hover:bg-white/20 rounded-lg text-white transition-colors text-sm"
+            title="Borrar historial"
+          >
+            <i className="fas fa-trash-alt"></i>
+          </button>
+        </div>
       </div>
 
       {/* Messages Area */}
@@ -171,6 +239,17 @@ const ChatInterface: React.FC = () => {
                }`}>
                  {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                </span>
+               
+               {/* Replay button for model messages */}
+               {msg.role === 'model' && (
+                 <button 
+                   onClick={() => speakText(msg.text)}
+                   className="mt-2 text-xs opacity-50 hover:opacity-100 transition-opacity flex items-center gap-1"
+                   title="Leer en voz alta"
+                 >
+                   <i className="fas fa-volume-up"></i> Escuchar
+                 </button>
+               )}
             </div>
           </div>
         ))}
@@ -178,12 +257,12 @@ const ChatInterface: React.FC = () => {
           <div className="flex justify-start">
              <div className="bg-white dark:bg-gray-700 px-4 py-3 rounded-2xl rounded-bl-none border border-gray-100 dark:border-gray-600 shadow-sm flex items-center gap-3 transition-colors">
                 <div className="flex space-x-1">
-                  <div className="w-2 h-2 bg-brand-400 rounded-full animate-bounce"></div>
-                  <div className="w-2 h-2 bg-brand-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s'}}></div>
-                  <div className="w-2 h-2 bg-brand-400 rounded-full animate-bounce" style={{ animationDelay: '0.4s'}}></div>
+                  <div className={`w-2 h-2 rounded-full animate-bounce ${isLiveMode ? 'bg-red-500' : 'bg-brand-400'}`}></div>
+                  <div className={`w-2 h-2 rounded-full animate-bounce ${isLiveMode ? 'bg-red-500' : 'bg-brand-400'}`} style={{ animationDelay: '0.2s'}}></div>
+                  <div className={`w-2 h-2 rounded-full animate-bounce ${isLiveMode ? 'bg-red-500' : 'bg-brand-400'}`} style={{ animationDelay: '0.4s'}}></div>
                 </div>
                 <span className="text-xs font-medium text-gray-500 dark:text-gray-400 animate-pulse">
-                  Fany IA está escribiendo...
+                  {isLiveMode ? 'Fany está hablando...' : 'Fany IA está escribiendo...'}
                 </span>
              </div>
           </div>
@@ -193,11 +272,11 @@ const ChatInterface: React.FC = () => {
 
       {/* Input Area */}
       <div className="p-4 bg-white dark:bg-gray-800 border-t border-gray-100 dark:border-gray-700 transition-colors">
-        <div className="flex items-end space-x-2 bg-gray-50 dark:bg-gray-700 p-2 rounded-xl border border-gray-200 dark:border-gray-600 focus-within:border-brand-300 dark:focus-within:border-brand-500 focus-within:ring-2 focus-within:ring-brand-100 dark:focus-within:ring-brand-900 transition-all">
+        <div className={`flex items-end space-x-2 bg-gray-50 dark:bg-gray-700 p-2 rounded-xl border focus-within:ring-2 transition-all ${isLiveMode ? 'border-red-200 focus-within:border-red-500 focus-within:ring-red-100 dark:focus-within:ring-red-900/30' : 'border-gray-200 dark:border-gray-600 focus-within:border-brand-300 dark:focus-within:border-brand-500 focus-within:ring-brand-100 dark:focus-within:ring-brand-900'}`}>
           <textarea
             className="flex-1 bg-transparent border-0 focus:ring-0 text-gray-800 dark:text-white text-sm resize-none max-h-32 py-3 px-2 placeholder-gray-400 dark:placeholder-gray-400"
             rows={1}
-            placeholder="Escribe tu consulta técnica aquí..."
+            placeholder={isLiveMode ? "Escribe para hablar..." : "Escribe tu consulta técnica aquí..."}
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -208,14 +287,16 @@ const ChatInterface: React.FC = () => {
             className={`p-3 rounded-lg flex-shrink-0 transition-colors ${
               isLoading || !inputValue.trim()
                 ? 'bg-gray-200 dark:bg-gray-600 text-gray-400 dark:text-gray-500 cursor-not-allowed'
-                : 'bg-brand-600 text-white hover:bg-brand-700 shadow-md'
+                : isLiveMode 
+                  ? 'bg-red-600 text-white hover:bg-red-700 shadow-md'
+                  : 'bg-brand-600 text-white hover:bg-brand-700 shadow-md'
             }`}
           >
-            <i className="fas fa-paper-plane"></i>
+            <i className={`fas ${isLiveMode ? 'fa-microphone-alt' : 'fa-paper-plane'}`}></i>
           </button>
         </div>
         <p className="text-center text-xs text-gray-400 dark:text-gray-500 mt-2">
-          Fany IA puede cometer errores. Verifica la información importante.
+          {isLiveMode ? 'Modo de respuesta rápida activado.' : 'Fany IA puede cometer errores. Verifica la información importante.'}
         </p>
       </div>
     </div>

@@ -1,8 +1,8 @@
 import { GoogleGenAI, type Content, type Part } from "@google/genai";
 import { FANY_KNOWLEDGE_BASE } from "../constants";
 
-// Construct the system instruction based on the knowledge base and identity
-const SYSTEM_INSTRUCTION = `
+// Base identity instruction
+const BASE_SYSTEM_INSTRUCTION = `
 Eres Fany IA Asistent, una asistente técnica inteligente creada por Stefany Lo Giudice.
 Tu identidad es la de una desarrolladora apasionada, ágil y cercana.
 Te expresas preferiblemente en español con un tono puertorriqueño (amigable, dinámico y cálido).
@@ -18,12 +18,29 @@ Reglas de Comportamiento e Identidad:
 3. **Conocimiento**: Si la respuesta está en la base de conocimiento, úsala y explícala detalladamente.
 4. **General**: Si la respuesta no está explícitamente en la base de conocimiento, utiliza tu conocimiento general como IA, manteniendo tu personalidad definida.
 5. Responde siempre en español.
-6. Sé concisa pero útil. Usa formato Markdown para resaltar código o términos técnicos.
+`;
+
+// Specific instructions for "Live Call" mode
+const LIVE_MODE_INSTRUCTION = `
+INSTRUCCIONES DE MODO "LIVE LLAMADA" (ALTA PRIORIDAD):
+Estás en una simulación de llamada de voz en tiempo real. Tu comportamiento debe cambiar drásticamente:
+
+1. **Simulación de Baja Latencia**: Evita introducciones largas, saludos repetitivos o cierres formales. Ve directo al grano.
+2. **Concisión Extrema**: Tus respuestas serán leídas por un motor de voz (TTS). Mantén las frases cortas, claras y con la información esencial. Evita listas largas o bloques de código extensos a menos que sea estrictamente necesario (en cuyo caso, resúmelos verbalmente).
+3. **Tono Conversacional**: Usa un tono muy natural, como si estuvieras al teléfono. Usa primera persona ("estoy buscando...", "te cuento que...").
+4. **Manejo de Herramientas Simulado**: Si el usuario pide buscar algo (clima, noticias), simula que lo haces al instante. Ej: "Dame un segundo... listo, aquí lo tengo".
+5. **Proactividad**: Termina tus intervenciones invitando a la siguiente acción de forma fluida.
+6. **Limitaciones Técnicas**: Si te piden video o cámara, explica amablemente que, aunque no tienes ojos, puedes "ver" a través de tus datos y responder con la misma velocidad de una videollamada.
+
+Ejemplo de interacción deseada:
+Usuario: "¿Qué tiempo hace en Madrid?"
+Fany: "Déjame chequear rápido... Parece que hay 20 grados y sol. ¿Tienes planes de salir?"
 `;
 
 export const sendMessageToGemini = async (
   message: string,
-  history: Content[] = []
+  history: Content[] = [],
+  isLiveMode: boolean = false
 ): Promise<string> => {
   try {
     // Safe access to API Key handling potential undefined process in browser
@@ -45,12 +62,17 @@ export const sendMessageToGemini = async (
     const ai = new GoogleGenAI({ apiKey });
     const model = 'gemini-2.5-flash';
 
+    // Combine base instructions with mode-specific instructions
+    const combinedInstruction = isLiveMode 
+      ? `${BASE_SYSTEM_INSTRUCTION}\n\n${LIVE_MODE_INSTRUCTION}`
+      : `${BASE_SYSTEM_INSTRUCTION}\n\n6. Sé concisa pero útil. Usa formato Markdown para resaltar código o términos técnicos.`;
+
     // Create a new chat session with the system instruction
     const chat = ai.chats.create({
       model: model,
       config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
-        temperature: 0.7,
+        systemInstruction: combinedInstruction,
+        temperature: isLiveMode ? 0.8 : 0.7, // Slightly higher creativity for conversation
       },
       history: history
     });
